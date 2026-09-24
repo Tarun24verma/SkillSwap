@@ -1,0 +1,33 @@
+{
+  "name": "skillswap",
+  "version": "1.0.0",
+  "description": "University peer-to-peer tutoring and time banking platform",
+  "keywords": [
+    "tutoring",
+    "skillswap",
+    "time-banking"
+  ],
+  "homepage": "https://github.com/Tarun24verma/SkillSwap#readme",
+  "bugs": {
+    "url": "https://github.com/Tarun24verma/SkillSwap/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tarun24verma/SkillSwap.git"
+  },
+  "license": "MIT",
+  "author": "Tarun Verma",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.1",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.23.0"
+  }
+}
