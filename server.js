@@ -15,3 +15,15 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost: ${PORT}`);
 });
+
+const helmet = require('helmet');
+app.use(helmet());
+
+const authRoutes = require('./routes/auth');
+app.use('/api/auth', authRoutes);
+
+const profileRoutes = require('./routes/profile');
+app.use('/api/profile', profileRoutes);
+
+const profileController = require('./controllers/profileController');
+console.log(profileController);
