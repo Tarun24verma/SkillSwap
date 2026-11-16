@@ -1,13 +1,32 @@
-scratch
-SkillSwap_Project_Synopsis_Filled.docx
-implementation_plan.md
+# Dependencies
 node_modules/
+
+# Environment Variables
 .env
+.env.*
+!.env.example
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS & Temp Files
+.DS_Store
+Thumbs.db
+~$*
+*.tmp
+
+# Documentation & Draft Assets
+scratch/
+implementation_plan.md
+SkillSwap_Project_Synopsis_Filled.docx
+SkillSwap_Project_Report.docx
 SkillSwap_Pitch_Deck.pptx
 Pitch_Deck.md
 pitch-deck.html
 Example_Project_Report.pdf
-SkillSwap_Project_Report.docx
 generate_report.py
 report_builder.py
 test_doc.py
