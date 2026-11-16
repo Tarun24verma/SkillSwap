@@ -82,7 +82,7 @@ CREATE TABLE sessions (
     student_id    INT         NOT NULL REFERENCES users(id),
     subject_id    INT         NOT NULL REFERENCES subjects(id),
     status        VARCHAR(15) NOT NULL DEFAULT 'pending'
-                      CHECK (status IN ('pending', 'confirmed', 'completed', 'cancelled')),
+                      CHECK (status IN ('pending', 'accepted', 'declined', 'completed', 'cancelled')),
     scheduled_at  TIMESTAMP   NOT NULL,
     duration_mins INT         NOT NULL DEFAULT 60
                       CHECK (duration_mins > 0),

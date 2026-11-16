@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile & Skills | SkillSwap</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="navbar-container"></div>
+
+    <main class="main-content py-4">
+        <div class="container">
+            <div class="row g-4">
+                <!-- Profile Settings Column -->
+                <div class="col-lg-5">
+                    <div class="card p-4 shadow-sm mb-4">
+                        <h4 class="fw-bold mb-3">👤 Profile Settings</h4>
+                        <form id="profileForm">
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">Full Name</label>
+                                <input type="text" class="form-control" id="profileName" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">Email Address</label>
+                                <input type="email" class="form-control" id="profileEmail" disabled>
+                                <div class="form-text">Email cannot be changed after registration.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">Account Role</label>
+                                <select class="form-select" id="profileRole">
+                                    <option value="both">Both (Tutor & Student)</option>
+                                    <option value="student">Student Only</option>
+                                    <option value="tutor">Tutor Only</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary rounded-pill w-100 fw-bold py-2" id="saveProfileBtn">Save Profile</button>
+                        </form>
+                    </div>
+
+                    <div class="card p-4 shadow-sm bg-light border-0">
+                        <h6 class="fw-bold text-muted mb-2">Account Overview</h6>
+                        <ul class="list-unstyled mb-0 small">
+                            <li class="mb-1">Member Since: <span id="accountCreatedAt" class="text-dark fw-bold">--</span></li>
+                            <li class="mb-1">Available Credits: <span id="accountCredits" class="badge bg-primary fs-6">5</span></li>
+                            <li>Tutor Average Rating: <span id="accountRating" class="fw-bold text-warning">--</span></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Skills Management Column -->
+                <div class="col-lg-7">
+                    <!-- Add / Update Skill Card -->
+                    <div class="card p-4 shadow-sm mb-4">
+                        <h4 class="fw-bold mb-1">🎯 Add or Update a Skill</h4>
+                        <p class="text-muted small mb-3">Specify subjects you are able to teach to peers or are currently learning.</p>
+
+                        <form id="addSkillForm">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-bold">Subject</label>
+                                    <select class="form-select" id="skillSubjectSelect" required>
+                                        <option value="">Select a subject...</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-bold">Skill Level</label>
+                                    <select class="form-select" id="skillLevelSelect" required>
+                                        <option value="beginner">Beginner</option>
+                                        <option value="intermediate" selected>Intermediate</option>
+                                        <option value="advanced">Advanced</option>
+                                    </select>
+                                </div>
+                                <div class="col-12">
+                                    <div class="form-check form-switch p-3 bg-light rounded">
+                                        <input class="form-check-input ms-0 me-3" type="checkbox" id="canTeachSwitch" checked>
+                                        <label class="form-check-label fw-bold" for="canTeachSwitch">
+                                            I want to tutor other students in this subject (Can Teach)
+                                        </label>
+                                        <div class="text-muted small">When enabled, your profile will appear in tutor searches and you can earn 4 credits per completed session.</div>
+                                    </div>
+                                </div>
+                                <div class="col-12">
+                                    <button type="submit" class="btn btn-success rounded-pill px-4 fw-bold" id="addSkillBtn">+ Save Subject Skill</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Skills List Card -->
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-white py-3">
+                            <h5 class="fw-bold mb-0">📚 Your Subjects & Skills</h5>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th class="ps-3">Subject</th>
+                                            <th>Level</th>
+                                            <th>Tutoring Status</th>
+                                            <th class="text-end pe-3">Remove</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="skillsTableBody">
+                                        <tr>
+                                            <td colspan="4" class="text-center py-4 text-muted">Loading your skills...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/api.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!API.getToken()) {
+                window.location.href = 'index.html';
+                return;
+            }
+            API.renderNavbar('profile');
+            await loadProfileData();
+            await loadSubjectsList();
+            await loadUserSkills();
+        });
+
+        async function loadProfileData() {
+            try {
+                const profile = await API.refreshProfileHeader();
+                document.getElementById('profileName').value = profile.name;
+                document.getElementById('profileEmail').value = profile.email;
+                document.getElementById('profileRole').value = profile.role;
+
+                document.getElementById('accountCreatedAt').innerText = new Date(profile.created_at).toLocaleDateString();
+                document.getElementById('accountCredits').innerText = `${profile.credits} Credits`;
+                document.getElementById('accountRating').innerText = profile.rating ? `${Number(profile.rating).toFixed(2)} ⭐` : 'Not yet rated';
+            } catch (err) {
+                API.showToast(err.message, 'danger');
+            }
+        }
+
+        async function loadSubjectsList() {
+            try {
+                const subjects = await API.request('/api/subjects');
+                const select = document.getElementById('skillSubjectSelect');
+                select.innerHTML = '<option value="">Select a subject...</option>' + 
+                    subjects.map(s => `<option value="${s.id}">${s.name} (${s.code})</option>`).join('');
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function loadUserSkills() {
+            const tbody = document.getElementById('skillsTableBody');
+            try {
+                const skills = await API.request('/api/profile/skills');
+                if (skills.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-muted">No skills added yet. Add a subject above!</td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = skills.map(s => {
+                    const levelClass = s.skill_level === 'advanced' ? 'bg-danger text-white' 
+                                     : s.skill_level === 'intermediate' ? 'bg-primary text-white' 
+                                     : 'bg-info text-dark';
+                    const teachBadge = s.can_teach 
+                        ? `<span class="badge bg-success-subtle text-success border border-success fw-bold">✓ Can Teach</span>` 
+                        : `<span class="badge bg-secondary-subtle text-secondary border">Learning Only</span>`;
+
+                    return `
+                        <tr>
+                            <td class="ps-3">
+                                <strong>${s.subject_name}</strong>
+                                <div class="text-muted small">${s.code || ''}</div>
+                            </td>
+                            <td><span class="badge ${levelClass} text-uppercase small">${s.skill_level}</span></td>
+                            <td>${teachBadge}</td>
+                            <td class="text-end pe-3">
+                                <button class="btn btn-sm btn-outline-danger rounded-pill" onclick="deleteSkill(${s.subject_id})">🗑️ Delete</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="4" class="text-center text-danger py-4">${err.message}</td></tr>`;
+            }
+        }
+
+        document.getElementById('profileForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('saveProfileBtn');
+            btn.disabled = true;
+            btn.innerText = 'Saving...';
+
+            try {
+                const res = await API.request('/api/profile', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        name: document.getElementById('profileName').value,
+                        role: document.getElementById('profileRole').value
+                    })
+                });
+                API.showToast('Profile updated successfully!', 'success');
+                await loadProfileData();
+            } catch (err) {
+                API.showToast(err.message, 'danger');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = 'Save Profile';
+            }
+        });
+
+        document.getElementById('addSkillForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const subject_id = document.getElementById('skillSubjectSelect').value;
+            const skill_level = document.getElementById('skillLevelSelect').value;
+            const can_teach = document.getElementById('canTeachSwitch').checked;
+            const btn = document.getElementById('addSkillBtn');
+
+            btn.disabled = true;
+
+            try {
+                await API.request('/api/profile/skills', {
+                    method: 'POST',
+                    body: JSON.stringify({ subject_id, skill_level, can_teach })
+                });
+                API.showToast('Skill saved successfully!', 'success');
+                await loadUserSkills();
+            } catch (err) {
+                API.showToast(err.message, 'danger');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        async function deleteSkill(subjectId) {
+            if (!confirm('Remove this subject skill from your profile?')) return;
+            try {
+                await API.request(`/api/profile/skills/${subjectId}`, { method: 'DELETE' });
+                API.showToast('Skill removed', 'info');
+                await loadUserSkills();
+            } catch (err) {
+                API.showToast(err.message, 'danger');
+            }
+        }
+    </script>
+</body>
+</html>
