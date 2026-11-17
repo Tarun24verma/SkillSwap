@@ -7,6 +7,7 @@
 DROP TABLE IF EXISTS credit_purchases CASCADE;
 DROP TABLE IF EXISTS transactions    CASCADE;
 DROP TABLE IF EXISTS sessions        CASCADE;
+DROP TABLE IF EXISTS email_verifications CASCADE;
 DROP TABLE IF EXISTS user_skills     CASCADE;
 DROP TABLE IF EXISTS subjects        CASCADE;
 DROP TABLE IF EXISTS users           CASCADE;
@@ -34,6 +35,19 @@ CREATE TABLE users (
     total_sessions_taught INT                 NOT NULL DEFAULT 0,
     total_sessions_taken  INT                 NOT NULL DEFAULT 0,
     created_at            TIMESTAMP           NOT NULL DEFAULT NOW()
+);
+
+-- Pending registrations are retained until their email OTP is verified.
+CREATE TABLE email_verifications (
+    email         VARCHAR(150) PRIMARY KEY,
+    name          VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role          VARCHAR(10)  NOT NULL DEFAULT 'both'
+                      CHECK (role IN ('student', 'tutor', 'both')),
+    otp           VARCHAR(6)   NOT NULL
+                      CHECK (otp ~ '^[0-9]{6}$'),
+    expires_at    TIMESTAMPTZ  NOT NULL,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 -- Platform wallet — system account used to collect the session sink fee.

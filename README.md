@@ -60,7 +60,12 @@ DB_NAME=skillswap_db
 DB_USER=postgres
 DB_PASSWORD=your_postgres_password
 JWT_SECRET=your_super_secret_jwt_key
+SMTP_USER=your_gmail_address@gmail.com
+SMTP_APP_PASSWORD=your_google_app_password
 ```
+
+Verification emails are sent through Gmail SMTP using a Google App Password. Keep
+the app password secret and do not commit your `.env` file.
 
 ### 3. Initialize Database
 Execute the database schema migration script using `psql`:
