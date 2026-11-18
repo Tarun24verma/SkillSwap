@@ -54,12 +54,19 @@ function authErrorMessage(error) {
     const messages = {
         'auth/email-already-in-use': 'An account already uses this email. Sign in and verify it to continue.',
         'auth/invalid-credential': 'Email or password is incorrect.',
+        'auth/invalid-login-credentials': 'Email or password is incorrect.',
+        'auth/user-not-found': 'No account was found for this email.',
+        'auth/wrong-password': 'Email or password is incorrect.',
+        'auth/user-disabled': 'This account has been disabled. Contact support.',
         'auth/invalid-email': 'Enter a valid email address.',
         'auth/weak-password': 'Choose a password with at least 6 characters.',
         'auth/too-many-requests': 'Too many attempts. Wait a while and try again.',
         'auth/network-request-failed': 'Could not reach Firebase. Check your connection and try again.'
     };
-    return messages[error.code] || 'Authentication failed. Please try again.';
+    if (error.code) {
+        return messages[error.code] || `Firebase sign-in failed (${error.code}). Check the Firebase configuration and try again.`;
+    }
+    return error.message || 'Could not complete sign-in. Please try again.';
 }
 
 async function establishSkillSwapSession(firebaseUser) {
