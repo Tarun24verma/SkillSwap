@@ -1,253 +1,168 @@
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
 const { validationResult } = require('express-validator');
 const pool = require('../models/db');
-const { sendOtpEmail } = require('../utils/mailer');
+const { getFirebaseAuth } = require('../utils/firebaseAdmin');
 
 const SIGNUP_BONUS = 5;
 
-// POST /api/auth/register-initiate - Step 1: Validate, generate OTP, send email
-exports.initiateRegister = async (req, res) => {
+// POST /api/auth/firebase-session - Verify Firebase identity and provision SkillSwap account
+exports.createFirebaseSession = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         return res.status(400).json({ error: errors.array()[0].msg, errors: errors.array() });
     }
 
-    const { name, email, password, role = 'both' } = req.body;
+    const authorization = req.headers.authorization || '';
+    const tokenMatch = authorization.match(/^Bearer\s+(.+)$/i);
+    if (!tokenMatch) {
+        return res.status(401).json({ error: 'Firebase ID token is required' });
+    }
+    if (!process.env.JWT_SECRET) {
+        console.error('JWT_SECRET is not configured');
+        return res.status(500).json({ error: 'Authentication is not configured' });
+    }
 
+    let firebaseAuth;
     try {
-        // 1. Check if email is already a registered user
-        const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-        if (existing.rows.length > 0) {
-            return res.status(409).json({ error: 'Email already registered. Please sign in instead.' });
-        }
-
-        // 2. Generate 6-digit numeric OTP
-        const otp = crypto.randomInt(100000, 999999).toString();
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-        // 3. Upsert into email_verifications table
-        await pool.query(
-            `INSERT INTO email_verifications (email, name, password_hash, role, otp, expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (email)
-             DO UPDATE SET
-                name = EXCLUDED.name,
-                password_hash = EXCLUDED.password_hash,
-                role = EXCLUDED.role,
-                otp = EXCLUDED.otp,
-                expires_at = EXCLUDED.expires_at,
-                created_at = NOW()`,
-            [email, name, hashedPassword, role, otp, expiresAt]
-        );
-
-        // 4. Send email via nodemailer
-        await sendOtpEmail(email, name, otp);
-
-        res.status(200).json({
-            message: `Verification code sent to ${email}. Please check your inbox.`,
-            email
-        });
+        firebaseAuth = getFirebaseAuth();
     } catch (err) {
-        console.error('Error initiating registration:', err);
-        res.status(500).json({ error: 'Server error sending verification code' });
-    }
-};
-
-// POST /api/auth/verify-otp - Step 2: Validate OTP, create user & credit bonus
-exports.verifyOtp = async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({ error: errors.array()[0].msg, errors: errors.array() });
+        console.error('Firebase Admin configuration error:', err.message);
+        return res.status(500).json({ error: 'Firebase authentication is not configured' });
     }
 
-    const { email, otp } = req.body;
-
-    const client = await pool.connect();
+    let decodedToken;
     try {
+        decodedToken = await firebaseAuth.verifyIdToken(tokenMatch[1]);
+    } catch (err) {
+        console.warn('Firebase ID token verification failed:', err.message);
+        return res.status(401).json({ error: 'Invalid or expired Firebase session' });
+    }
+
+    if (!decodedToken.uid || !decodedToken.email) {
+        return res.status(401).json({ error: 'Firebase account must have a verified email address' });
+    }
+    if (decodedToken.email_verified !== true) {
+        return res.status(403).json({ error: 'Verify your email address before continuing' });
+    }
+
+    const email = decodedToken.email.trim().toLowerCase();
+    const body = req.body || {};
+    const suppliedName = typeof body.name === 'string' ? body.name.trim() : '';
+    const tokenName = typeof decodedToken.name === 'string' ? decodedToken.name.trim() : '';
+    const name = suppliedName || tokenName || email.split('@')[0];
+    const role = body.role || 'both';
+    if (email.length > 150) {
+        return res.status(400).json({ error: 'Email address is too long' });
+    }
+    if (name.length > 100) {
+        return res.status(400).json({ error: 'Name must be 100 characters or fewer' });
+    }
+
+    let client;
+    try {
+        client = await pool.connect();
         await client.query('BEGIN');
 
-        // 1. Check verification record
-        const verResult = await client.query(
-            'SELECT * FROM email_verifications WHERE email = $1 FOR UPDATE',
-            [email]
+        let created = false;
+        let userResult = await client.query(
+            `SELECT id, name, email, role, credits, rating,
+                    total_sessions_taught, total_sessions_taken, created_at
+             FROM users
+             WHERE firebase_uid = $1
+             FOR UPDATE`,
+            [decodedToken.uid]
         );
+        let user = userResult.rows[0];
 
-        if (verResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ error: 'No pending registration found for this email. Please register again.' });
+        if (user) {
+            if (user.email !== email) {
+                userResult = await client.query(
+                    `UPDATE users SET email = $1
+                     WHERE id = $2
+                     RETURNING id, name, email, role, credits, rating,
+                               total_sessions_taught, total_sessions_taken, created_at`,
+                    [email, user.id]
+                );
+                user = userResult.rows[0];
+            }
+        } else {
+            const existingEmail = await client.query(
+                `SELECT id, firebase_uid
+                 FROM users
+                 WHERE email = $1
+                 FOR UPDATE`,
+                [email]
+            );
+
+            if (existingEmail.rows.length > 0) {
+                const existing = existingEmail.rows[0];
+                if (existing.firebase_uid && existing.firebase_uid !== decodedToken.uid) {
+                    await client.query('ROLLBACK');
+                    return res.status(409).json({ error: 'This email is already linked to another account' });
+                }
+
+                userResult = await client.query(
+                    `UPDATE users
+                     SET firebase_uid = $1, password_hash = NULL
+                     WHERE id = $2
+                     RETURNING id, name, email, role, credits, rating,
+                               total_sessions_taught, total_sessions_taken, created_at`,
+                    [decodedToken.uid, existing.id]
+                );
+                user = userResult.rows[0];
+            } else {
+                userResult = await client.query(
+                    `INSERT INTO users (firebase_uid, name, email, password_hash, role, credits)
+                     VALUES ($1, $2, $3, NULL, $4, $5)
+                     ON CONFLICT (firebase_uid) DO NOTHING
+                     RETURNING id, name, email, role, credits, rating,
+                               total_sessions_taught, total_sessions_taken, created_at`,
+                    [decodedToken.uid, name, email, role, SIGNUP_BONUS]
+                );
+                user = userResult.rows[0];
+
+                if (user) {
+                    created = true;
+                    await client.query(
+                        `INSERT INTO transactions (sender_id, receiver_id, amount, transaction_type)
+                         VALUES (0, $1, $2, 'signup_bonus')`,
+                        [user.id, SIGNUP_BONUS]
+                    );
+                } else {
+                    userResult = await client.query(
+                        `SELECT id, name, email, role, credits, rating,
+                                total_sessions_taught, total_sessions_taken, created_at
+                         FROM users
+                         WHERE firebase_uid = $1
+                         FOR UPDATE`,
+                        [decodedToken.uid]
+                    );
+                    user = userResult.rows[0];
+                    if (!user) throw new Error('Firebase account could not be provisioned');
+                }
+            }
         }
-
-        const record = verResult.rows[0];
-
-        // 2. Check if expired
-        if (new Date() > new Date(record.expires_at)) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
-        }
-
-        // 3. Validate OTP
-        if (record.otp !== otp.trim()) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ error: 'Invalid verification code. Please check your email and try again.' });
-        }
-
-        // 4. Double check if email got registered in between
-        const existing = await client.query('SELECT id FROM users WHERE email = $1', [email]);
-        if (existing.rows.length > 0) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ error: 'Email already registered. Please sign in.' });
-        }
-
-        // 5. Create user with 5 credits
-        const userResult = await client.query(
-            `INSERT INTO users (name, email, password_hash, role, credits)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING id, name, email, role, credits, rating, total_sessions_taught, total_sessions_taken, created_at`,
-            [record.name, record.email, record.password_hash, record.role, SIGNUP_BONUS]
-        );
-        const user = userResult.rows[0];
-
-        // 6. Record signup_bonus in transactions ledger
-        await client.query(
-            `INSERT INTO transactions (sender_id, receiver_id, amount, transaction_type)
-             VALUES (0, $1, $2, 'signup_bonus')`,
-            [user.id, SIGNUP_BONUS]
-        );
-
-        // 7. Clean up email_verifications
-        await client.query('DELETE FROM email_verifications WHERE email = $1', [email]);
 
         await client.query('COMMIT');
 
-        const token = jwt.sign(
+        const sessionToken = jwt.sign(
             { id: user.id, email: user.email, role: user.role },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
 
-        res.status(201).json({
-            message: 'Email verified successfully! Welcome to SkillSwap.',
-            token,
+        return res.status(created ? 201 : 200).json({
+            token: sessionToken,
             user
         });
     } catch (err) {
-        await client.query('ROLLBACK');
-        console.error('Error verifying OTP:', err);
-        res.status(500).json({ error: 'Server error during verification' });
-    } finally {
-        client.release();
-    }
-};
-
-// POST /api/auth/resend-otp - Resend code
-exports.resendOtp = async (req, res) => {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'Email is required' });
-
-    try {
-        const verResult = await pool.query('SELECT * FROM email_verifications WHERE email = $1', [email]);
-        if (verResult.rows.length === 0) {
-            return res.status(400).json({ error: 'No pending registration found for this email.' });
+        if (client) await client.query('ROLLBACK');
+        if (err.code === '23505') {
+            return res.status(409).json({ error: 'An account already exists for this email' });
         }
-
-        const record = verResult.rows[0];
-        const newOtp = crypto.randomInt(100000, 999999).toString();
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
-        await pool.query(
-            'UPDATE email_verifications SET otp = $1, expires_at = $2, created_at = NOW() WHERE email = $3',
-            [newOtp, expiresAt, email]
-        );
-
-        await sendOtpEmail(email, record.name, newOtp);
-
-        res.json({ message: `New verification code sent to ${email}.` });
-    } catch (err) {
-        console.error('Error resending OTP:', err);
-        res.status(500).json({ error: 'Server error resending code' });
-    }
-};
-
-// Legacy direct register kept for backward compatibility (e.g. tests)
-exports.register = async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-    const { name, email, password, role = 'both' } = req.body;
-
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-
-        const existing = await client.query('SELECT id FROM users WHERE email = $1', [email]);
-        if (existing.rows.length > 0) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ error: 'Email already registered' });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-
-        const userResult = await client.query(
-            `INSERT INTO users (name, email, password_hash, role, credits)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING id, name, email, role, credits, rating, total_sessions_taught, total_sessions_taken, created_at`,
-            [name, email, hashedPassword, role, SIGNUP_BONUS]
-        );
-        const user = userResult.rows[0];
-
-        await client.query(
-            `INSERT INTO transactions (sender_id, receiver_id, amount, transaction_type)
-             VALUES (0, $1, $2, 'signup_bonus')`,
-            [user.id, SIGNUP_BONUS]
-        );
-
-        await client.query('COMMIT');
-
-        const token = jwt.sign(
-            { id: user.id, email: user.email, role: user.role },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-
-        res.status(201).json({ token, user });
-    } catch (err) {
-        await client.query('ROLLBACK');
-        console.error('Error during registration:', err);
-        res.status(500).json({ error: 'Server error during registration' });
+        console.error('Error creating SkillSwap session:', err);
+        return res.status(500).json({ error: 'Server error creating account session' });
     } finally {
-        client.release();
-    }
-};
-
-exports.login = async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-    const { email, password } = req.body;
-
-    try {
-        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (result.rows.length === 0)
-            return res.status(401).json({ error: 'Invalid credentials' });
-
-        const user = result.rows[0];
-        const isMatch = await bcrypt.compare(password, user.password_hash);
-        if (!isMatch)
-            return res.status(401).json({ error: 'Invalid credentials' });
-
-        const token = jwt.sign(
-            { id: user.id, email: user.email, role: user.role },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-
-        const { password_hash: _, ...safeUser } = user;
-        res.json({ token, user: safeUser });
-    } catch (err) {
-        console.error('Error during login:', err);
-        res.status(500).json({ error: 'Server error during login' });
+        if (client) client.release();
     }
 };

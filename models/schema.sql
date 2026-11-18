@@ -17,6 +17,7 @@ DROP TABLE IF EXISTS users           CASCADE;
 --  USERS
 --  - Every real user starts with 5 credits.
 --  - id = 0 is reserved as the platform wallet (system account).
+--  - Firebase manages passwords; password_hash is retained only for legacy accounts.
 --  - credits    : spendable balance (no hard cap enforced here;
 --                 the "buy only if < 5" rule is enforced in app logic).
 --  - rating     : average tutor rating (1.00 – 5.00), NULL until rated.
@@ -26,7 +27,8 @@ CREATE TABLE users (
     id                    SERIAL PRIMARY KEY,
     name                  VARCHAR(100)        NOT NULL,
     email                 VARCHAR(150)        NOT NULL UNIQUE,
-    password_hash         VARCHAR(255)        NOT NULL,
+    password_hash         VARCHAR(255),
+    firebase_uid          VARCHAR(128)        UNIQUE,
     role                  VARCHAR(10)         NOT NULL DEFAULT 'both'
                               CHECK (role IN ('student', 'tutor', 'both')),
     credits               INT                 NOT NULL DEFAULT 5
@@ -35,19 +37,6 @@ CREATE TABLE users (
     total_sessions_taught INT                 NOT NULL DEFAULT 0,
     total_sessions_taken  INT                 NOT NULL DEFAULT 0,
     created_at            TIMESTAMP           NOT NULL DEFAULT NOW()
-);
-
--- Pending registrations are retained until their email OTP is verified.
-CREATE TABLE email_verifications (
-    email         VARCHAR(150) PRIMARY KEY,
-    name          VARCHAR(100) NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    role          VARCHAR(10)  NOT NULL DEFAULT 'both'
-                      CHECK (role IN ('student', 'tutor', 'both')),
-    otp           VARCHAR(6)   NOT NULL
-                      CHECK (otp ~ '^[0-9]{6}$'),
-    expires_at    TIMESTAMPTZ  NOT NULL,
-    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 -- Platform wallet — system account used to collect the session sink fee.

@@ -1,6 +1,6 @@
 // Centralized API Client and Utilities for SkillSwap
 
-const API = {
+const API = window.API = {
     getToken() {
         return localStorage.getItem('skillswap_token');
     },
@@ -41,7 +41,7 @@ const API = {
             const data = await res.json().catch(() => ({}));
 
             if (!res.ok) {
-                if (res.status === 401 && !endpoint.includes('/api/auth/login')) {
+                if (res.status === 401 && !endpoint.startsWith('/api/auth/')) {
                     this.clearAuth();
                     throw new Error('Session expired. Please log in again.');
                 }

@@ -69,11 +69,9 @@ exports.addSkill = async (req, res) => {
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const { subject_id, skill_level = 'beginner' } = req.body;
-    // can_teach can be boolean or inferred from type === 'teach'
     const can_teach = req.body.can_teach !== undefined 
         ? Boolean(req.body.can_teach) 
         : (req.body.type === 'teach');
-    const type = can_teach ? 'teach' : 'learn';
 
     try {
         // Validate subject exists
@@ -83,15 +81,15 @@ exports.addSkill = async (req, res) => {
 
         // Upsert skill on (user_id, subject_id)
         const result = await pool.query(
-            `INSERT INTO user_skills (user_id, subject_id, skill_level, can_teach, type)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO user_skills (user_id, subject_id, skill_level, can_teach)
+             VALUES ($1, $2, $3, $4)
              ON CONFLICT (user_id, subject_id)
              DO UPDATE SET 
                 skill_level = EXCLUDED.skill_level,
-                can_teach = EXCLUDED.can_teach,
-                type = EXCLUDED.type
-             RETURNING user_id, subject_id, skill_level, can_teach, type`,
-            [req.user.id, subject_id, skill_level, can_teach, type]
+                can_teach = EXCLUDED.can_teach
+             RETURNING user_id, subject_id, skill_level, can_teach,
+                       CASE WHEN can_teach THEN 'teach' ELSE 'learn' END AS type`,
+            [req.user.id, subject_id, skill_level, can_teach]
         );
         res.status(201).json(result.rows[0]);
     } catch (err) {

@@ -1,0 +1,210 @@
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
+import {
+    createUserWithEmailAndPassword,
+    getAuth,
+    reload,
+    sendEmailVerification,
+    signInWithEmailAndPassword,
+    signOut,
+    updateProfile
+} from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
+
+const config = window.SKILLSWAP_FIREBASE_CONFIG;
+const requiredConfig = ['apiKey', 'authDomain', 'projectId', 'appId'];
+const configIsReady = config && requiredConfig.every(key =>
+    typeof config[key] === 'string' &&
+    config[key].length > 0 &&
+    !config[key].startsWith('YOUR_')
+);
+
+const pendingProfileKey = 'skillswap_pending_profile';
+let auth;
+let pendingVerificationUser = null;
+let resendTimer;
+
+function getPendingProfile(email) {
+    try {
+        const profile = JSON.parse(localStorage.getItem(pendingProfileKey));
+        return profile && profile.email === email.toLowerCase() ? profile : null;
+    } catch (err) {
+        localStorage.removeItem(pendingProfileKey);
+        return null;
+    }
+}
+
+function verificationActionSettings() {
+    return {
+        url: `${window.location.origin}/index.html?emailVerified=1`
+    };
+}
+
+function showVerificationNotice(user) {
+    pendingVerificationUser = user;
+    document.getElementById('verificationNoticeText').textContent =
+        `Verify ${user.email} using the link in your inbox, then sign in.`;
+    document.getElementById('verificationNotice').classList.remove('d-none');
+}
+
+function hideVerificationNotice() {
+    pendingVerificationUser = null;
+    document.getElementById('verificationNotice').classList.add('d-none');
+}
+
+function authErrorMessage(error) {
+    const messages = {
+        'auth/email-already-in-use': 'An account already uses this email. Sign in and verify it to continue.',
+        'auth/invalid-credential': 'Email or password is incorrect.',
+        'auth/invalid-email': 'Enter a valid email address.',
+        'auth/weak-password': 'Choose a password with at least 6 characters.',
+        'auth/too-many-requests': 'Too many attempts. Wait a while and try again.',
+        'auth/network-request-failed': 'Could not reach Firebase. Check your connection and try again.'
+    };
+    return messages[error.code] || 'Authentication failed. Please try again.';
+}
+
+async function establishSkillSwapSession(firebaseUser) {
+    const email = firebaseUser.email.toLowerCase();
+    const pendingProfile = getPendingProfile(email);
+    const name = pendingProfile?.name || firebaseUser.displayName || email.split('@')[0];
+    const role = pendingProfile?.role || 'both';
+    const idToken = await firebaseUser.getIdToken(true);
+    const result = await window.API.request('/api/auth/firebase-session', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ name, role })
+    });
+
+    window.API.setAuth(result.token, result.user);
+    localStorage.removeItem(pendingProfileKey);
+    window.API.showToast(`Welcome, ${result.user.name}!`, 'success');
+    setTimeout(() => window.location.href = 'dashboard.html', 500);
+}
+
+function startResendCooldown(button) {
+    let remaining = 60;
+    button.disabled = true;
+    button.textContent = `Resend in ${remaining}s`;
+    if (resendTimer) clearInterval(resendTimer);
+
+    resendTimer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+            clearInterval(resendTimer);
+            button.disabled = false;
+            button.textContent = 'Resend verification link';
+        } else {
+            button.textContent = `Resend in ${remaining}s`;
+        }
+    }, 1000);
+}
+
+async function handleLogin(event) {
+    event.preventDefault();
+    const button = document.getElementById('loginBtn');
+    button.disabled = true;
+    button.textContent = 'Signing in...';
+
+    try {
+        const credential = await signInWithEmailAndPassword(
+            auth,
+            document.getElementById('loginEmail').value.trim(),
+            document.getElementById('loginPassword').value
+        );
+        await reload(credential.user);
+
+        if (!credential.user.emailVerified) {
+            showVerificationNotice(credential.user);
+            window.API.showToast('Verify your email before signing in.', 'warning');
+            return;
+        }
+
+        hideVerificationNotice();
+        await establishSkillSwapSession(credential.user);
+    } catch (error) {
+        window.API.showToast(authErrorMessage(error), 'danger');
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Sign In';
+    }
+}
+
+async function handleRegistration(event) {
+    event.preventDefault();
+    const button = document.getElementById('regBtn');
+    button.disabled = true;
+    button.textContent = 'Creating account...';
+
+    const name = document.getElementById('regName').value.trim();
+    const email = document.getElementById('regEmail').value.trim().toLowerCase();
+    const password = document.getElementById('regPassword').value;
+    const role = document.getElementById('regRole').value;
+
+    try {
+        const credential = await createUserWithEmailAndPassword(auth, email, password);
+        pendingVerificationUser = credential.user;
+        await updateProfile(credential.user, { displayName: name });
+        localStorage.setItem(pendingProfileKey, JSON.stringify({ email, name, role }));
+        await sendEmailVerification(credential.user, verificationActionSettings());
+        await signOut(auth);
+
+        window.API.showToast(
+            'Verification link sent. Verify your email, then sign in to activate your account and receive 5 credits.',
+            'success'
+        );
+    } catch (error) {
+        if (pendingVerificationUser && !pendingVerificationUser.emailVerified) {
+            showVerificationNotice(pendingVerificationUser);
+        }
+        window.API.showToast(authErrorMessage(error), 'danger');
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Create Account & Send Verification Link';
+    }
+}
+
+async function handleResendVerification() {
+    const button = document.getElementById('resendVerificationBtn');
+    if (!pendingVerificationUser) {
+        window.API.showToast('Sign in first so we can resend your verification link.', 'warning');
+        return;
+    }
+
+    button.disabled = true;
+    button.textContent = 'Sending...';
+    try {
+        await sendEmailVerification(pendingVerificationUser, verificationActionSettings());
+        window.API.showToast('A new verification link has been sent.', 'success');
+        startResendCooldown(button);
+    } catch (error) {
+        button.disabled = false;
+        button.textContent = 'Resend verification link';
+        window.API.showToast(authErrorMessage(error), 'danger');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    window.API.renderNavbar();
+    if (window.API.getToken()) {
+        window.location.href = 'dashboard.html';
+        return;
+    }
+
+    if (!configIsReady) {
+        window.API.showToast('Add your Firebase web app config in js/firebase-config.js first.', 'danger');
+        document.getElementById('loginBtn').disabled = true;
+        document.getElementById('regBtn').disabled = true;
+        return;
+    }
+
+    auth = getAuth(initializeApp(config));
+    document.getElementById('loginForm').addEventListener('submit', handleLogin);
+    document.getElementById('registerForm').addEventListener('submit', handleRegistration);
+    document.getElementById('resendVerificationBtn').addEventListener('click', handleResendVerification);
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('emailVerified') === '1') {
+        document.getElementById('login-tab').click();
+        window.API.showToast('Email verified. Sign in to activate your SkillSwap account and claim 5 credits.', 'success');
+        window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.hash}`);
+    }
+});

@@ -23,14 +23,15 @@
 
 - **Backend:** Node.js, Express 5.x
 - **Database:** PostgreSQL with `pg` connection pool
-- **Security:** `bcryptjs` password hashing (salt 10), `jsonwebtoken` (JWT 7d expiry), `express-validator`, `helmet` HTTP security headers, CORS
+- **Authentication:** Firebase Authentication (email/password and verification links); Firebase Admin verifies ID tokens, while the API issues its own 7-day JWT for SkillSwap endpoints
+- **Security:** `express-validator`, `helmet` HTTP security headers, CORS
 - **Frontend:** Bootstrap 5.3, responsive CSS3, vanilla JavaScript `fetch` API
 - **Testing:** Jest, Supertest
 
 ```mermaid
 flowchart TD
     Client["Bootstrap 5 Frontend (HTML5 / JS)"] -->|fetch + JWT Bearer| Middleware["Express 5 Security Middlewares"]
-    Middleware --> Auth["/api/auth (Register, Login)"]
+    Middleware --> Auth["/api/auth (Firebase session exchange)"]
     Middleware --> Profile["/api/profile (Stats, Skills CRUD)"]
     Middleware --> Search["/api/subjects & /api/tutors"]
     Middleware --> Sessions["/api/sessions (Booking, Lifecycle, Complete)"]
@@ -50,7 +51,17 @@ flowchart TD
 - Node.js 18+ installed
 - PostgreSQL 14+ installed and running
 
-### 2. Environment Setup (`.env`)
+### 2. Configure Firebase Authentication
+
+1. Create a Firebase project and register a **Web app**.
+2. In **Authentication → Sign-in method**, enable **Email/Password**.
+3. In **Authentication → Settings → Authorized domains**, add the hostname serving this app (for example, `skillswap-mefe.onrender.com`) and `localhost` for local development.
+4. Copy the Web app's `apiKey`, `authDomain`, `projectId`, and `appId` into `public/js/firebase-config.js`. This client configuration is public; do not put a service-account key there.
+5. In **Project settings → Service accounts**, create a private key. Keep the downloaded JSON secret. Set its full JSON contents as `FIREBASE_SERVICE_ACCOUNT_JSON` on Render; locally, either use that variable or point `FIREBASE_SERVICE_ACCOUNT_PATH` to the private key file outside the repository.
+
+Firebase sends the verification link. A SkillSwap account and its 5-credit signup bonus are created only after the backend verifies Firebase's signed token and confirms `email_verified`.
+
+### 3. Environment Setup (`.env`)
 Create a `.env` file in the root directory:
 ```env
 PORT=3000
@@ -60,25 +71,31 @@ DB_NAME=skillswap_db
 DB_USER=postgres
 DB_PASSWORD=your_postgres_password
 JWT_SECRET=your_super_secret_jwt_key
-SMTP_USER=your_gmail_address@gmail.com
-SMTP_APP_PASSWORD=your_google_app_password
+FIREBASE_SERVICE_ACCOUNT_PATH=D:\private\skillswap-firebase-admin.json
 ```
 
-Verification emails are sent through Gmail SMTP using a Google App Password. Keep
-the app password secret and do not commit your `.env` file.
+On Render, add `FIREBASE_SERVICE_ACCOUNT_JSON` and `JWT_SECRET` as environment variables. Never commit the service-account JSON or `.env` file.
 
-### 3. Initialize Database
+### 4. Update an Existing Database
+Apply the Firebase Auth migration to the existing database; it adds the Firebase UID column and removes the OTP-pending table:
+```bash
+psql -h localhost -p 5433 -U postgres -d skillswap_db -f models/migrations/001_firebase_auth.sql
+```
+
+For a new database, use `models/schema.sql` instead.
+
+### 5. Initialize Database (New Database Only)
 Execute the database schema migration script using `psql`:
 ```bash
 psql -h localhost -p 5433 -U postgres -d skillswap_db -f models/schema.sql
 ```
 
-### 4. Install Dependencies
+### 6. Install Dependencies
 ```bash
 npm install
 ```
 
-### 5. Start the Server
+### 7. Start the Server
 ```bash
 npm start
 ```
@@ -92,27 +109,17 @@ Run the automated test suites powered by **Jest** and **Supertest**:
 ```bash
 npm test
 ```
-This runs 15 automated integration tests validating:
-1. Registration & JWT authentication
-2. Initial 5-credit signup bonus ledger entry
-3. Duplicate registration conflict handling
-4. Protected profile routes
-5. Tutor subject discovery & search
-6. Session booking & self-booking prevention
-7. Tutor acceptance lifecycle
-8. **Atomic 5 / 4 / 1 SkillCredit transfer**
-9. Idempotency guards (cannot complete session twice)
-10. Feedback submission & dynamic tutor rating calculation
-11. Purchase buy-gate (cannot buy when balance $\ge 5$)
-12. Purchase cap enforcement (cannot exceed 10 balance)
+The tests cover verified Firebase account provisioning, one-time signup credits,
+protected profile access, tutor search and session lifecycle, the atomic 5/4/1
+credit transfer, feedback, and credit-purchase rules.
 
 ---
 
 ## 📡 API Reference Summary
 
 ### Authentication & Profile
-- `POST /api/auth/register` — Register user, award 5 bonus credits.
-- `POST /api/auth/login` — Login and receive JWT.
+- Firebase Email/Password sign-up sends the verification link.
+- `POST /api/auth/firebase-session` — Verify a Firebase ID token, provision the SkillSwap account after email verification, and return the app JWT.
 - `GET /api/profile` — View current user stats & credit balance.
 - `PUT /api/profile` — Update user name or role.
 - `GET /api/profile/skills` — View user's skills.

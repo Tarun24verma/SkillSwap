@@ -1,77 +1,104 @@
+jest.mock('../utils/firebaseAdmin', () => ({
+    getFirebaseAuth: () => ({
+        verifyIdToken: async token => JSON.parse(Buffer.from(token, 'base64url').toString('utf8'))
+    })
+}));
+
 const request = require('supertest');
 const app = require('../server');
 const pool = require('../models/db');
 
-describe('1. Authentication & Accounts', () => {
+const tokenFor = (uid, email, emailVerified = true) => Buffer.from(JSON.stringify({
+    uid,
+    email,
+    email_verified: emailVerified
+})).toString('base64url');
+
+describe('Firebase authentication and account provisioning', () => {
     const testEmail = `student_${Date.now()}@university.edu`;
+    const testUid = `firebase_student_${Date.now()}`;
+    const unverifiedEmail = `unverified_${Date.now()}@university.edu`;
     let userToken = '';
+    let userId;
 
     afterAll(async () => {
-        // Clean up test user and transactions
-        if (testEmail) {
-            await pool.query('DELETE FROM transactions WHERE sender_id IN (SELECT id FROM users WHERE email = $1) OR receiver_id IN (SELECT id FROM users WHERE email = $1)', [testEmail]);
-            await pool.query('DELETE FROM users WHERE email = $1', [testEmail]);
+        if (userId) {
+            await pool.query(
+                `DELETE FROM transactions
+                 WHERE sender_id = $1 OR receiver_id = $1`,
+                [userId]
+            );
+            await pool.query('DELETE FROM users WHERE id = $1', [userId]);
         }
+        await pool.query('DELETE FROM users WHERE email = $1', [unverifiedEmail]);
     });
 
-    test('POST /api/auth/register should create user with 5 credits and signup_bonus transaction', async () => {
+    test('verified Firebase identity creates a user and one signup bonus', async () => {
         const res = await request(app)
-            .post('/api/auth/register')
-            .send({
-                name: 'Test Student',
-                email: testEmail,
-                password: 'password123',
-                role: 'both'
-            });
+            .post('/api/auth/firebase-session')
+            .set('Authorization', `Bearer ${tokenFor(testUid, testEmail)}`)
+            .send({ name: 'Test Student', role: 'both' });
 
         expect(res.statusCode).toBe(201);
         expect(res.body).toHaveProperty('token');
         expect(res.body.user).toHaveProperty('credits', 5);
+        userId = res.body.user.id;
         userToken = res.body.token;
 
-        // Verify signup_bonus ledger entry
-        const txRes = await pool.query(
-            `SELECT * FROM transactions WHERE receiver_id = $1 AND transaction_type = 'signup_bonus'`,
-            [res.body.user.id]
+        const user = await pool.query(
+            'SELECT firebase_uid, password_hash FROM users WHERE id = $1',
+            [userId]
         );
-        expect(txRes.rows.length).toBe(1);
-        expect(txRes.rows[0].sender_id).toBe(0); // platform wallet
-        expect(txRes.rows[0].amount).toBe(5);
+        expect(user.rows[0].firebase_uid).toBe(testUid);
+        expect(user.rows[0].password_hash).toBeNull();
+
+        const transactions = await pool.query(
+            `SELECT sender_id, amount FROM transactions
+             WHERE receiver_id = $1 AND transaction_type = 'signup_bonus'`,
+            [userId]
+        );
+        expect(transactions.rows).toEqual([{ sender_id: 0, amount: 5 }]);
     });
 
-    test('POST /api/auth/register with duplicate email should return 409 conflict', async () => {
+    test('repeated Firebase session does not grant another signup bonus', async () => {
         const res = await request(app)
-            .post('/api/auth/register')
-            .send({
-                name: 'Duplicate Student',
-                email: testEmail,
-                password: 'password123',
-                role: 'student'
-            });
-
-        expect(res.statusCode).toBe(409);
-        expect(res.body).toHaveProperty('error', 'Email already registered');
-    });
-
-    test('POST /api/auth/login should authenticate and return a valid JWT', async () => {
-        const res = await request(app)
-            .post('/api/auth/login')
-            .send({
-                email: testEmail,
-                password: 'password123'
-            });
+            .post('/api/auth/firebase-session')
+            .set('Authorization', `Bearer ${tokenFor(testUid, testEmail)}`)
+            .send({ name: 'Changed Name', role: 'student' });
 
         expect(res.statusCode).toBe(200);
-        expect(res.body).toHaveProperty('token');
-        expect(res.body.user.email).toBe(testEmail);
+        expect(res.body.user.id).toBe(userId);
+        expect(res.body.user.name).toBe('Test Student');
+        expect(res.body.user.credits).toBe(5);
+
+        const transactions = await pool.query(
+            `SELECT id FROM transactions
+             WHERE receiver_id = $1 AND transaction_type = 'signup_bonus'`,
+            [userId]
+        );
+        expect(transactions.rows).toHaveLength(1);
     });
 
-    test('GET /api/profile without token should return 401 Unauthorized', async () => {
-        const res = await request(app).get('/api/profile');
-        expect(res.statusCode).toBe(401);
+    test('unverified Firebase identity cannot create a user or receive credits', async () => {
+        const res = await request(app)
+            .post('/api/auth/firebase-session')
+            .set('Authorization', `Bearer ${tokenFor('firebase_unverified', unverifiedEmail, false)}`)
+            .send({ name: 'Unverified Student' });
+
+        expect(res.statusCode).toBe(403);
+        const user = await pool.query('SELECT id FROM users WHERE email = $1', [unverifiedEmail]);
+        expect(user.rows).toHaveLength(0);
     });
 
-    test('GET /api/profile with valid token should return user profile', async () => {
+    test('legacy direct registration endpoint is no longer available', async () => {
+        const res = await request(app)
+            .post('/api/auth/register')
+            .send({ name: 'Unverified', email: unverifiedEmail, password: 'password123' });
+
+        expect(res.statusCode).toBe(404);
+    });
+
+    test('protected profile uses the SkillSwap session token', async () => {
         const res = await request(app)
             .get('/api/profile')
             .set('Authorization', `Bearer ${userToken}`);

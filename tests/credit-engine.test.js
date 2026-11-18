@@ -1,34 +1,55 @@
+jest.mock('../utils/firebaseAdmin', () => ({
+    getFirebaseAuth: () => ({
+        verifyIdToken: async token => JSON.parse(Buffer.from(token, 'base64url').toString('utf8'))
+    })
+}));
+
 const request = require('supertest');
 const app = require('../server');
 const pool = require('../models/db');
 
+const tokenFor = (uid, email) => Buffer.from(JSON.stringify({
+    uid,
+    email,
+    email_verified: true
+})).toString('base64url');
+
 describe('Core SkillCredit Economy, Lifecycle & Purchase Rules', () => {
     const studentEmail = `student_engine_${Date.now()}@university.edu`;
     const tutorEmail = `tutor_engine_${Date.now()}@university.edu`;
+    const studentFirebaseUid = `student_engine_${Date.now()}`;
+    const tutorFirebaseUid = `tutor_engine_${Date.now()}`;
 
     let studentToken, studentId;
     let tutorToken, tutorId;
     let subjectId;
     let sessionId;
+    let platformCreditsBefore;
 
     beforeAll(async () => {
+        const platform = await pool.query('SELECT credits FROM users WHERE id = 0');
+        platformCreditsBefore = platform.rows[0].credits;
+        const subject = await pool.query(
+            'INSERT INTO subjects (name, code) VALUES ($1, $2) RETURNING id',
+            ['Credit Engine Test Subject', `TEST${Date.now()}`]
+        );
+        subjectId = subject.rows[0].id;
+
         // Register Student
         const resStudent = await request(app)
-            .post('/api/auth/register')
-            .send({ name: 'Student Alice', email: studentEmail, password: 'password123', role: 'student' });
+            .post('/api/auth/firebase-session')
+            .set('Authorization', `Bearer ${tokenFor(studentFirebaseUid, studentEmail)}`)
+            .send({ name: 'Student Alice', role: 'student' });
         studentToken = resStudent.body.token;
         studentId = resStudent.body.user.id;
 
         // Register Tutor
         const resTutor = await request(app)
-            .post('/api/auth/register')
-            .send({ name: 'Tutor Bob', email: tutorEmail, password: 'password123', role: 'tutor' });
+            .post('/api/auth/firebase-session')
+            .set('Authorization', `Bearer ${tokenFor(tutorFirebaseUid, tutorEmail)}`)
+            .send({ name: 'Tutor Bob', role: 'tutor' });
         tutorToken = resTutor.body.token;
         tutorId = resTutor.body.user.id;
-
-        // Get a subject ID (e.g. CS201)
-        const subRes = await request(app).get('/api/subjects');
-        subjectId = subRes.body[0].id;
 
         // Tutor adds skill with can_teach = true
         await request(app)
@@ -46,6 +67,12 @@ describe('Core SkillCredit Economy, Lifecycle & Purchase Rules', () => {
             await pool.query('DELETE FROM sessions WHERE student_id = ANY($1) OR tutor_id = ANY($1)', [userIds]);
             await pool.query('DELETE FROM user_skills WHERE user_id = ANY($1)', [userIds]);
             await pool.query('DELETE FROM users WHERE id = ANY($1)', [userIds]);
+        }
+        if (subjectId) {
+            await pool.query('DELETE FROM subjects WHERE id = $1', [subjectId]);
+        }
+        if (platformCreditsBefore !== undefined) {
+            await pool.query('UPDATE users SET credits = $1 WHERE id = 0', [platformCreditsBefore]);
         }
     });
 
