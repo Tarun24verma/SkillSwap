@@ -26,7 +26,7 @@ exports.createFirebaseSession = async (req, res) => {
     try {
         firebaseAuth = getFirebaseAuth();
     } catch (err) {
-        console.error('Firebase Admin configuration error:', err.message);
+        console.error('Firebase Admin configuration error:', err.stack || err.message);
         return res.status(500).json({ error: 'Firebase authentication is not configured' });
     }
 
