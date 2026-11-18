@@ -1,4 +1,5 @@
-const admin = require('firebase-admin');
+const { cert, getApps, initializeApp } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
 const fs = require('fs');
 const path = require('path');
 
@@ -40,12 +41,12 @@ exports.getFirebaseAuth = () => {
         throw new Error('Firebase credentials must be a service-account JSON file');
     }
 
-    if (!admin.apps.length) {
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
+    if (getApps().length === 0) {
+        initializeApp({
+            credential: cert(serviceAccount)
         });
     }
 
-    firebaseAuth = admin.auth();
+    firebaseAuth = getAuth();
     return firebaseAuth;
 };
