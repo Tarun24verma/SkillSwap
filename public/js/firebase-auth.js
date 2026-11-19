@@ -5,7 +5,8 @@ import {
     reload,
     sendEmailVerification,
     GoogleAuthProvider,
-    signInWithPopup,
+    getRedirectResult,
+    signInWithRedirect,
     signInWithEmailAndPassword,
     signOut,
     updateProfile
@@ -20,6 +21,7 @@ const configIsReady = config && requiredConfig.every(key =>
 );
 
 const pendingProfileKey = 'skillswap_pending_profile';
+const pendingGoogleProfileKey = 'skillswap_pending_google_profile';
 let auth;
 let pendingVerificationUser = null;
 let resendTimer;
@@ -64,7 +66,7 @@ function authErrorMessage(error) {
         'auth/weak-password': 'Choose a password with at least 6 characters.',
         'auth/too-many-requests': 'Too many attempts. Wait a while and try again.',
         'auth/network-request-failed': 'Could not reach Firebase. Check your connection and try again.',
-        'auth/popup-blocked': 'Allow popups for this site to sign in with Google.',
+        'auth/unauthorized-domain': 'This site is not authorized for Firebase sign-in. Add its domain in Firebase Authentication settings.',
         'auth/operation-not-allowed': 'Google sign-in is not enabled for this Firebase project.'
     };
     if (error.code) {
@@ -146,7 +148,7 @@ async function handleLogin(event) {
 async function handleGoogleSignIn() {
     const button = document.getElementById('googleSignInBtn');
     button.disabled = true;
-    button.textContent = 'Connecting to Google...';
+    button.textContent = 'Redirecting to Google...';
 
     const registerTab = document.getElementById('register-pane').classList.contains('active');
     const profile = registerTab
@@ -157,16 +159,11 @@ async function handleGoogleSignIn() {
         : {};
 
     try {
-        const provider = new GoogleAuthProvider();
-        const credential = await signInWithPopup(auth, provider);
-        hideVerificationNotice();
-        await establishSkillSwapSession(credential.user, profile);
+        sessionStorage.setItem(pendingGoogleProfileKey, JSON.stringify(profile));
+        await signInWithRedirect(auth, new GoogleAuthProvider());
     } catch (error) {
-        if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
-            window.API.showToast('Google sign-in was canceled.', 'warning');
-        } else {
-            window.API.showToast(authErrorMessage(error), 'danger');
-        }
+        sessionStorage.removeItem(pendingGoogleProfileKey);
+        window.API.showToast(authErrorMessage(error), 'danger');
     } finally {
         button.disabled = false;
         button.textContent = 'Continue with Google';
@@ -227,7 +224,7 @@ async function handleResendVerification() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     window.API.renderNavbar();
     if (window.API.getToken()) {
         window.location.href = 'dashboard.html';
@@ -247,6 +244,19 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('registerForm').addEventListener('submit', handleRegistration);
     document.getElementById('googleSignInBtn').addEventListener('click', handleGoogleSignIn);
     document.getElementById('resendVerificationBtn').addEventListener('click', handleResendVerification);
+
+    try {
+        const credential = await getRedirectResult(auth);
+        if (credential) {
+            const profile = JSON.parse(sessionStorage.getItem(pendingGoogleProfileKey) || '{}');
+            sessionStorage.removeItem(pendingGoogleProfileKey);
+            hideVerificationNotice();
+            await establishSkillSwapSession(credential.user, profile);
+        }
+    } catch (error) {
+        sessionStorage.removeItem(pendingGoogleProfileKey);
+        window.API.showToast(authErrorMessage(error), 'danger');
+    }
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('emailVerified') === '1') {
