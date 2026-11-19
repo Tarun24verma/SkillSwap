@@ -4,6 +4,8 @@ import {
     getAuth,
     reload,
     sendEmailVerification,
+    GoogleAuthProvider,
+    signInWithPopup,
     signInWithEmailAndPassword,
     signOut,
     updateProfile
@@ -61,7 +63,9 @@ function authErrorMessage(error) {
         'auth/invalid-email': 'Enter a valid email address.',
         'auth/weak-password': 'Choose a password with at least 6 characters.',
         'auth/too-many-requests': 'Too many attempts. Wait a while and try again.',
-        'auth/network-request-failed': 'Could not reach Firebase. Check your connection and try again.'
+        'auth/network-request-failed': 'Could not reach Firebase. Check your connection and try again.',
+        'auth/popup-blocked': 'Allow popups for this site to sign in with Google.',
+        'auth/operation-not-allowed': 'Google sign-in is not enabled for this Firebase project.'
     };
     if (error.code) {
         return messages[error.code] || `Firebase sign-in failed (${error.code}). Check the Firebase configuration and try again.`;
@@ -69,11 +73,15 @@ function authErrorMessage(error) {
     return error.message || 'Could not complete sign-in. Please try again.';
 }
 
-async function establishSkillSwapSession(firebaseUser) {
+async function establishSkillSwapSession(firebaseUser, profile = {}) {
+    if (!firebaseUser.email) {
+        throw new Error('Your Google account must have an email address to continue.');
+    }
+
     const email = firebaseUser.email.toLowerCase();
     const pendingProfile = getPendingProfile(email);
-    const name = pendingProfile?.name || firebaseUser.displayName || email.split('@')[0];
-    const role = pendingProfile?.role || 'both';
+    const name = pendingProfile?.name || profile.name || firebaseUser.displayName || email.split('@')[0];
+    const role = pendingProfile?.role || profile.role || 'both';
     const idToken = await firebaseUser.getIdToken(true);
     const result = await window.API.request('/api/auth/firebase-session', {
         method: 'POST',
@@ -132,6 +140,36 @@ async function handleLogin(event) {
     } finally {
         button.disabled = false;
         button.textContent = 'Sign In';
+    }
+}
+
+async function handleGoogleSignIn() {
+    const button = document.getElementById('googleSignInBtn');
+    button.disabled = true;
+    button.textContent = 'Connecting to Google...';
+
+    const registerTab = document.getElementById('register-pane').classList.contains('active');
+    const profile = registerTab
+        ? {
+            name: document.getElementById('regName').value.trim(),
+            role: document.getElementById('regRole').value
+        }
+        : {};
+
+    try {
+        const provider = new GoogleAuthProvider();
+        const credential = await signInWithPopup(auth, provider);
+        hideVerificationNotice();
+        await establishSkillSwapSession(credential.user, profile);
+    } catch (error) {
+        if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
+            window.API.showToast('Google sign-in was canceled.', 'warning');
+        } else {
+            window.API.showToast(authErrorMessage(error), 'danger');
+        }
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Continue with Google';
     }
 }
 
@@ -200,12 +238,14 @@ document.addEventListener('DOMContentLoaded', () => {
         window.API.showToast('Add your Firebase web app config in js/firebase-config.js first.', 'danger');
         document.getElementById('loginBtn').disabled = true;
         document.getElementById('regBtn').disabled = true;
+        document.getElementById('googleSignInBtn').disabled = true;
         return;
     }
 
     auth = getAuth(initializeApp(config));
     document.getElementById('loginForm').addEventListener('submit', handleLogin);
     document.getElementById('registerForm').addEventListener('submit', handleRegistration);
+    document.getElementById('googleSignInBtn').addEventListener('click', handleGoogleSignIn);
     document.getElementById('resendVerificationBtn').addEventListener('click', handleResendVerification);
 
     const params = new URLSearchParams(window.location.search);
